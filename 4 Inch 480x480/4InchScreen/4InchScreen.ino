@@ -192,9 +192,27 @@ void build_ui() {
     lv_obj_set_style_text_align(channel_hint_labels[i], LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
     lv_obj_add_flag(channel_hint_labels[i], LV_OBJ_FLAG_HIDDEN);
 
+    // --- PROGRESS BAR WITH ENHANCED CONTRAST & SHADOW ---
     channel_bars[i] = lv_bar_create(channel_cards[i]);
-    lv_obj_set_size(channel_bars[i], LV_PCT(100), 12);
-    lv_obj_set_style_bg_color(channel_bars[i], lv_color_hex(0x444444), LV_PART_MAIN);
+    lv_obj_set_size(channel_bars[i], LV_PCT(100), 14);
+
+    // Track (MAIN) styling: dark recessed background, visible border outline, drop shadow
+    lv_obj_set_style_bg_color(channel_bars[i], lv_color_hex(0x101010), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(channel_bars[i], LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_radius(channel_bars[i], 6, LV_PART_MAIN);
+
+    lv_obj_set_style_border_width(channel_bars[i], 1, LV_PART_MAIN);
+    lv_obj_set_style_border_color(channel_bars[i], lv_color_hex(0x555555), LV_PART_MAIN);
+    lv_obj_set_style_border_opa(channel_bars[i], LV_OPA_80, LV_PART_MAIN);
+
+    lv_obj_set_style_shadow_width(channel_bars[i], 8, LV_PART_MAIN);
+    lv_obj_set_style_shadow_color(channel_bars[i], lv_color_hex(0x000000), LV_PART_MAIN);
+    lv_obj_set_style_shadow_opa(channel_bars[i], LV_OPA_60, LV_PART_MAIN);
+    lv_obj_set_style_shadow_offset_y(channel_bars[i], 2, LV_PART_MAIN);
+
+    // Active Fill (INDICATOR) styling
+    lv_obj_set_style_radius(channel_bars[i], 6, LV_PART_INDICATOR);
+
     lv_bar_set_range(channel_bars[i], 0, 100);
     lv_bar_set_value(channel_bars[i], 0, LV_ANIM_OFF);
   }
@@ -230,7 +248,9 @@ void build_ui() {
   lv_obj_set_size(ota_bar, 400, 30);
   lv_obj_center(ota_bar);
   lv_bar_set_range(ota_bar, 0, 100);
-  lv_obj_set_style_bg_color(ota_bar, lv_color_hex(0x444444), LV_PART_MAIN);
+  lv_obj_set_style_bg_color(ota_bar, lv_color_hex(0x101010), LV_PART_MAIN);
+  lv_obj_set_style_border_width(ota_bar, 1, LV_PART_MAIN);
+  lv_obj_set_style_border_color(ota_bar, lv_color_hex(0x555555), LV_PART_MAIN);
   lv_obj_set_style_bg_color(ota_bar, lv_color_hex(0x00FF00), LV_PART_INDICATOR);
 
   ota_label = lv_label_create(ota_screen);
