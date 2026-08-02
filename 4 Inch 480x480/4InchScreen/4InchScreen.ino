@@ -17,6 +17,24 @@ struct GroupedCard {
   String reason;
 };
 
+struct Announcement {
+  String title;
+  String description;
+};
+
+struct SSDevice {
+  String name;
+  String state;
+  String color;
+};
+
+struct DayHours {
+  bool active = false;
+  String open;
+  String close;
+  bool closed;
+};
+
 enum DisplayMode { MODE_STARTUP,
                    MODE_MAIN,
                    MODE_OTA,
@@ -26,6 +44,7 @@ enum DisplayMode { MODE_STARTUP,
 
 long get_sort_score(const GroupedCard &g);
 void set_display_mode(DisplayMode mode);
+void update_screensaver_content();
 
 // ==========================================
 // LOCAL LVGL CONFIGURATION
@@ -37,6 +56,7 @@ void set_display_mode(DisplayMode mode);
 #define LCD_WIDTH 480
 #define LCD_HEIGHT 480
 #define MAX_CHANNELS 4
+#define MAX_ANNOUNCEMENTS 5
 
 #define ACS_RX_PIN 44
 #define ACS_TX_PIN 43
@@ -95,20 +115,46 @@ lv_obj_t *ota_label;
 
 lv_obj_t *info_screen;
 lv_obj_t *info_device_name_label;
+lv_obj_t *info_station_name_label;
 lv_obj_t *info_device_labels[MAX_CHANNELS];
 
 lv_obj_t *screensaver_screen;
 lv_obj_t *ss_content_container;
-lv_obj_t *ss_cta_label;
-lv_obj_t *ss_time_label;
-lv_obj_t *ss_date_label;
-lv_obj_t *ss_equip_label;
+
+lv_obj_t *ss_top_card;
+lv_obj_t *ss_top_label;
+lv_obj_t *ss_top_station_label;
+lv_obj_t *ss_top_table;
+
+lv_obj_t *ss_center_card;
+lv_obj_t *ss_center_title;
+lv_obj_t *ss_center_label;
+lv_obj_t *ss_hours_container;
+lv_obj_t *ss_hours_day_labels[7];
+lv_obj_t *ss_hours_time_labels[7];
+
+lv_obj_t *ss_bottom_card;
+lv_obj_t *ss_bottom_label;
+lv_obj_t *ss_bottom_station_label;
+lv_obj_t *ss_bottom_table;
 
 lv_obj_t *fault_screen;
 lv_obj_t *fault_label;
 
 DisplayMode current_mode = MODE_STARTUP;
 String global_url = "make.rit.edu";
+String global_station_name = "Makerspace Equipment";
+String global_device_name = "Makerspace Access Reader";
+
+Announcement announcements[MAX_ANNOUNCEMENTS];
+int num_announcements = 0;
+
+DayHours week_hours[7];
+bool has_hours = false;
+
+int ss_cycle = 0;
+SSDevice ss_devices[MAX_CHANNELS];
+int ss_device_count = 0;
 
 void set_display_mode(DisplayMode mode) {
   if (current_mode == mode) return;
@@ -124,8 +170,10 @@ void set_display_mode(DisplayMode mode) {
   else if (mode == MODE_MAIN) lv_obj_remove_flag(card_container, LV_OBJ_FLAG_HIDDEN);
   else if (mode == MODE_OTA) lv_obj_remove_flag(ota_screen, LV_OBJ_FLAG_HIDDEN);
   else if (mode == MODE_INFO) lv_obj_remove_flag(info_screen, LV_OBJ_FLAG_HIDDEN);
-  else if (mode == MODE_SCREENSAVER) lv_obj_remove_flag(screensaver_screen, LV_OBJ_FLAG_HIDDEN);
-  else if (mode == MODE_FAULT) lv_obj_remove_flag(fault_screen, LV_OBJ_FLAG_HIDDEN);
+  else if (mode == MODE_SCREENSAVER) {
+    lv_obj_remove_flag(screensaver_screen, LV_OBJ_FLAG_HIDDEN);
+    update_screensaver_content();
+  } else if (mode == MODE_FAULT) lv_obj_remove_flag(fault_screen, LV_OBJ_FLAG_HIDDEN);
 
   current_mode = mode;
 }
@@ -198,27 +246,18 @@ void build_ui() {
 
     channel_bars[i] = lv_bar_create(channel_cards[i]);
     lv_obj_set_size(channel_bars[i], LV_PCT(100), 14);
-
     lv_obj_set_style_bg_color(channel_bars[i], lv_color_hex(0x101010), LV_PART_MAIN);
     lv_obj_set_style_bg_opa(channel_bars[i], LV_OPA_COVER, LV_PART_MAIN);
     lv_obj_set_style_radius(channel_bars[i], 6, LV_PART_MAIN);
-
     lv_obj_set_style_border_width(channel_bars[i], 1, LV_PART_MAIN);
     lv_obj_set_style_border_color(channel_bars[i], lv_color_hex(0x555555), LV_PART_MAIN);
     lv_obj_set_style_border_opa(channel_bars[i], LV_OPA_80, LV_PART_MAIN);
-
-    lv_obj_set_style_shadow_width(channel_bars[i], 8, LV_PART_MAIN);
-    lv_obj_set_style_shadow_color(channel_bars[i], lv_color_hex(0x000000), LV_PART_MAIN);
-    lv_obj_set_style_shadow_opa(channel_bars[i], LV_OPA_60, LV_PART_MAIN);
-    lv_obj_set_style_shadow_offset_y(channel_bars[i], 2, LV_PART_MAIN);
-
     lv_obj_set_style_radius(channel_bars[i], 6, LV_PART_INDICATOR);
-
     lv_bar_set_range(channel_bars[i], 0, 100);
     lv_bar_set_value(channel_bars[i], 0, LV_ANIM_OFF);
   }
 
-  // --- 2. STARTUP OVERLAY ---
+  // --- 2-4: STARTUP, OTA, INFO ---
   startup_screen = lv_obj_create(main_screen);
   lv_obj_set_size(startup_screen, 480, 480);
   lv_obj_center(startup_screen);
@@ -231,7 +270,6 @@ void build_ui() {
   lv_obj_set_style_text_color(startup_label, lv_color_hex(0xFFFFFF), LV_PART_MAIN);
   lv_obj_center(startup_label);
 
-  // --- 3. OTA OVERLAY ---
   ota_screen = lv_obj_create(main_screen);
   lv_obj_set_size(ota_screen, 480, 480);
   lv_obj_center(ota_screen);
@@ -260,7 +298,6 @@ void build_ui() {
   lv_obj_set_style_text_color(ota_label, lv_color_hex(0xFFFFFF), LV_PART_MAIN);
   lv_obj_align(ota_label, LV_ALIGN_BOTTOM_MID, 0, -180);
 
-  // --- 4. INFO OVERLAY ---
   info_screen = lv_obj_create(main_screen);
   lv_obj_set_size(info_screen, 480, 480);
   lv_obj_center(info_screen);
@@ -277,9 +314,14 @@ void build_ui() {
   lv_obj_set_style_text_font(info_title_label, &lv_font_montserrat_32, LV_PART_MAIN);
   lv_obj_set_style_text_color(info_title_label, lv_color_hex(0x00FF00), LV_PART_MAIN);
 
+  info_station_name_label = lv_label_create(info_screen);
+  lv_label_set_text(info_station_name_label, ("Station Name: " + global_station_name).c_str());
+  lv_obj_set_style_text_font(info_station_name_label, &lv_font_montserrat_24, LV_PART_MAIN);
+  lv_obj_set_style_text_color(info_station_name_label, lv_color_hex(0xFFFFFF), LV_PART_MAIN);
+
   info_device_name_label = lv_label_create(info_screen);
-  lv_label_set_text(info_device_name_label, "Reader: Unknown");
-  lv_obj_set_style_text_font(info_device_name_label, &lv_font_montserrat_24, LV_PART_MAIN);
+  lv_label_set_text(info_device_name_label, ("ACS Device Name: " + global_device_name).c_str());
+  lv_obj_set_style_text_font(info_device_name_label, &lv_font_montserrat_20, LV_PART_MAIN);
   lv_obj_set_style_text_color(info_device_name_label, lv_color_hex(0xAAAAAA), LV_PART_MAIN);
   lv_obj_set_style_pad_bottom(info_device_name_label, 10, LV_PART_MAIN);
 
@@ -295,11 +337,11 @@ void build_ui() {
   for (int i = 0; i < MAX_CHANNELS; i++) {
     info_device_labels[i] = lv_label_create(info_list);
     lv_label_set_text(info_device_labels[i], "");
-    lv_obj_set_style_text_font(info_device_labels[i], &lv_font_montserrat_24, LV_PART_MAIN);
+    lv_obj_set_style_text_font(info_device_labels[i], &lv_font_montserrat_20, LV_PART_MAIN);
     lv_obj_set_style_text_color(info_device_labels[i], lv_color_hex(0xFFFFFF), LV_PART_MAIN);
     lv_label_set_long_mode(info_device_labels[i], LV_LABEL_LONG_WRAP);
     lv_obj_set_width(info_device_labels[i], LV_PCT(100));
-    lv_obj_set_style_pad_bottom(info_device_labels[i], 15, LV_PART_MAIN);
+    lv_obj_set_style_pad_bottom(info_device_labels[i], 12, LV_PART_MAIN);
   }
 
   lv_obj_t *info_footer = lv_label_create(info_screen);
@@ -310,7 +352,7 @@ void build_ui() {
   lv_obj_set_style_text_align(info_footer, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
   lv_obj_set_width(info_footer, LV_PCT(100));
 
-  // --- 5. CLOCK & EQUIPMENT SCREENSAVER OVERLAY ---
+  // --- 5. REDESIGNED SCREENSAVER OVERLAY ---
   screensaver_screen = lv_obj_create(main_screen);
   lv_obj_set_size(screensaver_screen, 480, 480);
   lv_obj_center(screensaver_screen);
@@ -324,60 +366,154 @@ void build_ui() {
   lv_obj_center(ss_content_container);
   lv_obj_set_style_bg_opa(ss_content_container, LV_OPA_TRANSP, LV_PART_MAIN);
   lv_obj_set_style_border_width(ss_content_container, 0, LV_PART_MAIN);
-  lv_obj_set_style_pad_all(ss_content_container, 10, LV_PART_MAIN);
+  lv_obj_set_style_pad_all(ss_content_container, 0, LV_PART_MAIN);
+  lv_obj_remove_flag(ss_content_container, LV_OBJ_FLAG_SCROLLABLE);
+
   lv_obj_set_layout(ss_content_container, LV_LAYOUT_FLEX);
   lv_obj_set_flex_flow(ss_content_container, LV_FLEX_FLOW_COLUMN);
-  lv_obj_set_flex_align(ss_content_container, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+  lv_obj_set_flex_align(ss_content_container, LV_FLEX_ALIGN_SPACE_EVENLY, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
 
-  ss_cta_label = lv_label_create(ss_content_container);
-  lv_label_set_text(ss_cta_label, "Tap ID at top to activate");
-  lv_obj_set_style_text_font(ss_cta_label, &lv_font_montserrat_24, LV_PART_MAIN);
-  lv_obj_set_style_text_color(ss_cta_label, lv_color_hex(0x00FF00), LV_PART_MAIN);
-  lv_obj_set_style_text_align(ss_cta_label, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
+  // TOP BLOCK (23%)
+  ss_top_card = lv_obj_create(ss_content_container);
+  lv_obj_set_size(ss_top_card, LV_PCT(100), LV_PCT(23));
+  lv_obj_set_style_bg_opa(ss_top_card, LV_OPA_TRANSP, LV_PART_MAIN);
+  lv_obj_set_style_border_width(ss_top_card, 0, LV_PART_MAIN);
+  lv_obj_remove_flag(ss_top_card, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_layout(ss_top_card, LV_LAYOUT_FLEX);
+  lv_obj_set_flex_flow(ss_top_card, LV_FLEX_FLOW_COLUMN);
+  lv_obj_set_flex_align(ss_top_card, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
 
-  lv_obj_t *clock_box = lv_obj_create(ss_content_container);
-  lv_obj_set_width(clock_box, LV_PCT(100));
-  lv_obj_set_height(clock_box, LV_SIZE_CONTENT);
-  lv_obj_set_style_bg_opa(clock_box, LV_OPA_TRANSP, LV_PART_MAIN);
-  lv_obj_set_style_border_width(clock_box, 0, LV_PART_MAIN);
-  lv_obj_set_layout(clock_box, LV_LAYOUT_FLEX);
-  lv_obj_set_flex_flow(clock_box, LV_FLEX_FLOW_COLUMN);
-  lv_obj_set_flex_align(clock_box, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+  ss_top_label = lv_label_create(ss_top_card);
+  lv_label_set_text(ss_top_label, "");
+  lv_obj_set_style_text_font(ss_top_label, &lv_font_montserrat_20, LV_PART_MAIN);
+  lv_obj_set_style_text_color(ss_top_label, lv_color_hex(0xFFFFFF), LV_PART_MAIN);
+  lv_label_set_long_mode(ss_top_label, LV_LABEL_LONG_WRAP);
+  lv_obj_set_width(ss_top_label, LV_PCT(100));
+  lv_obj_set_style_text_align(ss_top_label, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
 
-  ss_time_label = lv_label_create(clock_box);
-  lv_label_set_text(ss_time_label, "--:--");
-  lv_obj_set_style_text_font(ss_time_label, &lv_font_montserrat_32, LV_PART_MAIN);
-  lv_obj_set_style_text_color(ss_time_label, lv_color_hex(0xFFFFFF), LV_PART_MAIN);
+  ss_top_station_label = lv_label_create(ss_top_card);
+  lv_label_set_text(ss_top_station_label, "");
+  lv_obj_set_style_text_font(ss_top_station_label, &lv_font_montserrat_28, LV_PART_MAIN);
+  lv_obj_set_style_text_color(ss_top_station_label, lv_color_hex(0xFFFFFF), LV_PART_MAIN);
+  lv_label_set_long_mode(ss_top_station_label, LV_LABEL_LONG_WRAP);
+  lv_obj_set_width(ss_top_station_label, LV_PCT(100));
+  lv_obj_set_style_text_align(ss_top_station_label, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
+  lv_obj_add_flag(ss_top_station_label, LV_OBJ_FLAG_HIDDEN);
 
-  ss_date_label = lv_label_create(clock_box);
-  lv_label_set_text(ss_date_label, "------------------");
-  lv_obj_set_style_text_font(ss_date_label, &lv_font_montserrat_20, LV_PART_MAIN);
-  lv_obj_set_style_text_color(ss_date_label, lv_color_hex(0x888888), LV_PART_MAIN);
-  lv_obj_set_style_pad_top(ss_date_label, 5, LV_PART_MAIN);
+  // Top Device Table
+  ss_top_table = lv_obj_create(ss_top_card);
+  lv_obj_set_size(ss_top_table, LV_PCT(90), LV_PCT(100));
+  lv_obj_set_style_bg_opa(ss_top_table, LV_OPA_TRANSP, LV_PART_MAIN);
+  lv_obj_set_style_border_width(ss_top_table, 0, LV_PART_MAIN);
+  lv_obj_set_style_pad_all(ss_top_table, 0, LV_PART_MAIN);
+  lv_obj_set_style_pad_row(ss_top_table, 0, LV_PART_MAIN);
+  lv_obj_set_layout(ss_top_table, LV_LAYOUT_FLEX);
+  lv_obj_set_flex_flow(ss_top_table, LV_FLEX_FLOW_COLUMN);
+  lv_obj_set_flex_align(ss_top_table, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+  lv_obj_remove_flag(ss_top_table, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_add_flag(ss_top_table, LV_OBJ_FLAG_HIDDEN);
 
-  lv_obj_t *equip_card = lv_obj_create(ss_content_container);
-  lv_obj_set_width(equip_card, LV_PCT(100));
-  lv_obj_set_height(equip_card, LV_SIZE_CONTENT);
-  lv_obj_set_style_bg_color(equip_card, lv_color_hex(0x222222), LV_PART_MAIN);
-  lv_obj_set_style_border_color(equip_card, lv_color_hex(0x333333), LV_PART_MAIN);
-  lv_obj_set_style_border_width(equip_card, 1, LV_PART_MAIN);
-  lv_obj_set_style_radius(equip_card, 12, LV_PART_MAIN);
-  lv_obj_set_style_pad_all(equip_card, 15, LV_PART_MAIN);
-  lv_obj_set_layout(equip_card, LV_LAYOUT_FLEX);
-  lv_obj_set_flex_flow(equip_card, LV_FLEX_FLOW_COLUMN);
+  // CENTER BLOCK (54%)
+  ss_center_card = lv_obj_create(ss_content_container);
+  lv_obj_set_size(ss_center_card, LV_PCT(100), LV_PCT(54));
+  lv_obj_set_style_bg_opa(ss_center_card, LV_OPA_TRANSP, LV_PART_MAIN);
+  lv_obj_set_style_border_width(ss_center_card, 0, LV_PART_MAIN);
+  lv_obj_set_style_pad_all(ss_center_card, 15, LV_PART_MAIN);
+  lv_obj_remove_flag(ss_center_card, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_layout(ss_center_card, LV_LAYOUT_FLEX);
+  lv_obj_set_flex_flow(ss_center_card, LV_FLEX_FLOW_COLUMN);
+  lv_obj_set_flex_align(ss_center_card, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
 
-  lv_obj_t *equip_header = lv_label_create(equip_card);
-  lv_label_set_text(equip_header, "AVAILABLE EQUIPMENT");
-  lv_obj_set_style_text_font(equip_header, &lv_font_montserrat_20, LV_PART_MAIN);
-  lv_obj_set_style_text_color(equip_header, lv_color_hex(0xAAAAAA), LV_PART_MAIN);
-  lv_obj_set_style_pad_bottom(equip_header, 8, LV_PART_MAIN);
+  ss_center_title = lv_label_create(ss_center_card);
+  lv_label_set_text(ss_center_title, "Welcome to the Makerspace!");
+  lv_obj_set_style_text_font(ss_center_title, &lv_font_montserrat_24, LV_PART_MAIN);
+  lv_obj_set_style_text_color(ss_center_title, lv_color_hex(0xFFA500), LV_PART_MAIN);
+  lv_label_set_long_mode(ss_center_title, LV_LABEL_LONG_WRAP);
+  lv_obj_set_width(ss_center_title, LV_PCT(100));
+  lv_obj_set_style_text_align(ss_center_title, LV_TEXT_ALIGN_LEFT, LV_PART_MAIN);
+  lv_obj_set_style_pad_bottom(ss_center_title, 10, LV_PART_MAIN);
 
-  ss_equip_label = lv_label_create(equip_card);
-  lv_label_set_text(ss_equip_label, "No equipment available");
-  lv_obj_set_style_text_font(ss_equip_label, &lv_font_montserrat_24, LV_PART_MAIN);
-  lv_obj_set_style_text_color(ss_equip_label, lv_color_hex(0xFFFFFF), LV_PART_MAIN);
-  lv_label_set_long_mode(ss_equip_label, LV_LABEL_LONG_WRAP);
-  lv_obj_set_width(ss_equip_label, LV_PCT(100));
+  ss_center_label = lv_label_create(ss_center_card);
+  lv_label_set_text(ss_center_label, "");
+  lv_obj_set_style_text_font(ss_center_label, &lv_font_montserrat_20, LV_PART_MAIN);
+  lv_obj_set_style_text_color(ss_center_label, lv_color_hex(0xFFFFFF), LV_PART_MAIN);
+  lv_label_set_long_mode(ss_center_label, LV_LABEL_LONG_WRAP);
+  lv_obj_set_width(ss_center_label, LV_PCT(100));
+  lv_obj_set_style_text_align(ss_center_label, LV_TEXT_ALIGN_LEFT, LV_PART_MAIN);
+
+  // Center Hours Table (Custom tabular flex container)
+  ss_hours_container = lv_obj_create(ss_center_card);
+  lv_obj_set_width(ss_hours_container, LV_PCT(100));
+  lv_obj_set_height(ss_hours_container, LV_SIZE_CONTENT);
+  lv_obj_set_style_bg_opa(ss_hours_container, LV_OPA_TRANSP, LV_PART_MAIN);
+  lv_obj_set_style_border_width(ss_hours_container, 0, LV_PART_MAIN);
+  lv_obj_set_style_pad_all(ss_hours_container, 0, LV_PART_MAIN);
+  lv_obj_set_style_pad_row(ss_hours_container, 4, LV_PART_MAIN);
+  lv_obj_set_layout(ss_hours_container, LV_LAYOUT_FLEX);
+  lv_obj_set_flex_flow(ss_hours_container, LV_FLEX_FLOW_COLUMN);
+  lv_obj_remove_flag(ss_hours_container, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_add_flag(ss_hours_container, LV_OBJ_FLAG_HIDDEN);
+
+  for (int i = 0; i < 7; i++) {
+    lv_obj_t *row = lv_obj_create(ss_hours_container);
+    lv_obj_set_width(row, LV_PCT(100));
+    lv_obj_set_height(row, LV_SIZE_CONTENT);
+    lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, LV_PART_MAIN);
+    lv_obj_set_style_border_width(row, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(row, 0, LV_PART_MAIN);
+    lv_obj_remove_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_layout(row, LV_LAYOUT_FLEX);
+    lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(row, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+
+    ss_hours_day_labels[i] = lv_label_create(row);
+    lv_obj_set_style_text_font(ss_hours_day_labels[i], &lv_font_montserrat_20, LV_PART_MAIN);
+    lv_obj_set_style_text_color(ss_hours_day_labels[i], lv_color_hex(0xFFFFFF), LV_PART_MAIN);
+
+    ss_hours_time_labels[i] = lv_label_create(row);
+    lv_obj_set_style_text_font(ss_hours_time_labels[i], &lv_font_montserrat_20, LV_PART_MAIN);
+    lv_obj_set_style_text_color(ss_hours_time_labels[i], lv_color_hex(0xFFFFFF), LV_PART_MAIN);
+  }
+
+  // BOTTOM BLOCK (23%)
+  ss_bottom_card = lv_obj_create(ss_content_container);
+  lv_obj_set_size(ss_bottom_card, LV_PCT(100), LV_PCT(23));
+  lv_obj_set_style_bg_opa(ss_bottom_card, LV_OPA_TRANSP, LV_PART_MAIN);
+  lv_obj_set_style_border_width(ss_bottom_card, 0, LV_PART_MAIN);
+  lv_obj_remove_flag(ss_bottom_card, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_layout(ss_bottom_card, LV_LAYOUT_FLEX);
+  lv_obj_set_flex_flow(ss_bottom_card, LV_FLEX_FLOW_COLUMN);
+  lv_obj_set_flex_align(ss_bottom_card, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+
+  ss_bottom_label = lv_label_create(ss_bottom_card);
+  lv_label_set_text(ss_bottom_label, "");
+  lv_obj_set_style_text_font(ss_bottom_label, &lv_font_montserrat_20, LV_PART_MAIN);
+  lv_obj_set_style_text_color(ss_bottom_label, lv_color_hex(0xFFFFFF), LV_PART_MAIN);
+  lv_label_set_long_mode(ss_bottom_label, LV_LABEL_LONG_WRAP);
+  lv_obj_set_width(ss_bottom_label, LV_PCT(100));
+  lv_obj_set_style_text_align(ss_bottom_label, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
+
+  ss_bottom_station_label = lv_label_create(ss_bottom_card);
+  lv_label_set_text(ss_bottom_station_label, "");
+  lv_obj_set_style_text_font(ss_bottom_station_label, &lv_font_montserrat_28, LV_PART_MAIN);
+  lv_obj_set_style_text_color(ss_bottom_station_label, lv_color_hex(0xFFFFFF), LV_PART_MAIN);
+  lv_label_set_long_mode(ss_bottom_station_label, LV_LABEL_LONG_WRAP);
+  lv_obj_set_width(ss_bottom_station_label, LV_PCT(100));
+  lv_obj_set_style_text_align(ss_bottom_station_label, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
+  lv_obj_add_flag(ss_bottom_station_label, LV_OBJ_FLAG_HIDDEN);
+
+  // Bottom Device Table
+  ss_bottom_table = lv_obj_create(ss_bottom_card);
+  lv_obj_set_size(ss_bottom_table, LV_PCT(90), LV_PCT(100));
+  lv_obj_set_style_bg_opa(ss_bottom_table, LV_OPA_TRANSP, LV_PART_MAIN);
+  lv_obj_set_style_border_width(ss_bottom_table, 0, LV_PART_MAIN);
+  lv_obj_set_style_pad_all(ss_bottom_table, 0, LV_PART_MAIN);
+  lv_obj_set_style_pad_row(ss_bottom_table, 0, LV_PART_MAIN);
+  lv_obj_set_layout(ss_bottom_table, LV_LAYOUT_FLEX);
+  lv_obj_set_flex_flow(ss_bottom_table, LV_FLEX_FLOW_COLUMN);
+  lv_obj_set_flex_align(ss_bottom_table, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+  lv_obj_remove_flag(ss_bottom_table, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_add_flag(ss_bottom_table, LV_OBJ_FLAG_HIDDEN);
 
   // --- 6. FAULT OVERLAY ---
   fault_screen = lv_obj_create(main_screen);
@@ -406,6 +542,278 @@ void build_ui() {
 // ==========================================
 // 4. DATA PROCESSING & UTILS
 // ==========================================
+String strip_markdown(String md) {
+  String out = "";
+  for (size_t i = 0; i < md.length();) {
+    if (md[i] == '[') {
+      i++;
+      while (i < md.length() && md[i] != ']') {
+        out += md[i];
+        i++;
+      }
+      if (i < md.length() && md[i] == ']') i++;
+      if (i < md.length() && md[i] == '(') {
+        while (i < md.length() && md[i] != ')') i++;
+        if (i < md.length() && md[i] == ')') i++;
+      }
+    } else if (md[i] == '*' || md[i] == '#' || md[i] == '_') {
+      i++;
+    } else {
+      out += md[i];
+      i++;
+    }
+  }
+  return out;
+}
+
+String get_time_string() {
+  char time_buf[64];
+  struct tm timeinfo;
+  if (getLocalTime(&timeinfo)) {
+    strftime(time_buf, sizeof(time_buf), "%A, %B %d\n%I:%M %p", &timeinfo);
+  } else {
+    sprintf(time_buf, "Time Not Synced");
+  }
+  return String(time_buf);
+}
+
+// Calculates Day of the week (0=Sunday to 6=Saturday) via Zeller's congruence
+int get_weekday(String iso_date) {
+  if (iso_date.length() < 10) return 0;
+  int y = iso_date.substring(0, 4).toInt();
+  int m = iso_date.substring(5, 7).toInt();
+  int d = iso_date.substring(8, 10).toInt();
+
+  if (m < 3) {
+    m += 12;
+    y -= 1;
+  }
+  int k = y % 100;
+  int j = y / 100;
+  int h = (d + 13 * (m + 1) / 5 + k + k / 4 + j / 4 + 5 * j) % 7;
+  return (h + 6) % 7;
+}
+
+// Converts standard "19:00:00" string from JSON into "7:00 PM"
+String format_hour(String time_str) {
+  if (time_str.length() < 5) return time_str;
+  int h = time_str.substring(0, 2).toInt();
+  String m = time_str.substring(3, 5);
+  String ampm = (h >= 12) ? "PM" : "AM";
+  if (h == 0) h = 12;
+  if (h > 12) h -= 12;
+  return String(h) + ":" + m + " " + ampm;
+}
+
+void build_screensaver_device_list(lv_obj_t *table) {
+  lv_obj_clean(table);
+
+  if (ss_device_count == 0) {
+    lv_obj_t *no_eq = lv_label_create(table);
+    lv_label_set_text(no_eq, "No equipment available");
+    lv_obj_set_style_text_color(no_eq, lv_color_hex(0xFFFFFF), LV_PART_MAIN);
+    lv_obj_set_style_text_font(no_eq, &lv_font_montserrat_20, LV_PART_MAIN);
+    return;
+  }
+
+  for (int i = 0; i < ss_device_count; i++) {
+    lv_obj_t *row = lv_obj_create(table);
+    lv_obj_set_width(row, LV_PCT(100));
+    lv_obj_set_height(row, LV_SIZE_CONTENT);
+    lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, LV_PART_MAIN);
+    lv_obj_set_style_border_width(row, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(row, 0, LV_PART_MAIN);
+    lv_obj_remove_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_layout(row, LV_LAYOUT_FLEX);
+    lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(row, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+
+    lv_obj_t *name_lbl = lv_label_create(row);
+    lv_label_set_text(name_lbl, ss_devices[i].name.c_str());
+    lv_obj_set_style_text_color(name_lbl, lv_color_hex(0xFFFFFF), LV_PART_MAIN);
+    lv_obj_set_style_text_font(name_lbl, &lv_font_montserrat_20, LV_PART_MAIN);
+
+    lv_obj_t *state_lbl = lv_label_create(row);
+    lv_label_set_text(state_lbl, ss_devices[i].state.c_str());
+    uint32_t color_hex = strtoul(ss_devices[i].color.c_str(), NULL, 16);
+    lv_obj_set_style_text_color(state_lbl, lv_color_hex(color_hex), LV_PART_MAIN);
+    lv_obj_set_style_text_font(state_lbl, &lv_font_montserrat_20, LV_PART_MAIN);
+  }
+}
+
+void update_screensaver_content() {
+  // Outer sections swap every 6 internal cycles (6 * 30 seconds = 3 minutes)
+  int outer_cycle = ss_cycle / 6;
+  bool tap_at_top = (outer_cycle % 2 == 0);
+  bool show_time = ((outer_cycle / 2) % 2 == 0);
+
+  String tap_text = "#00FF00 Tap ID at top to activate#";
+
+  // Check how many items we are rotating through in the center
+  int total_center_items = num_announcements + (has_hours ? 2 : 0);
+  int center_idx = (total_center_items > 0) ? (ss_cycle % total_center_items) : 0;
+  bool showing_hours = (has_hours && center_idx >= num_announcements);
+
+  // Requirement: Whenever an hours-related center card is up, show date/time outer blocks
+  if (showing_hours) {
+    show_time = true;
+  }
+
+  // --- Update Top Block ---
+  if (tap_at_top) {
+    lv_obj_remove_flag(ss_top_label, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_remove_flag(ss_top_station_label, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(ss_top_table, LV_OBJ_FLAG_HIDDEN);
+
+    lv_label_set_text(ss_top_label, tap_text.c_str());
+    lv_label_set_recolor(ss_top_label, true);
+    lv_label_set_text(ss_top_station_label, global_station_name.c_str());
+  } else {
+    if (show_time) {
+      lv_obj_remove_flag(ss_top_label, LV_OBJ_FLAG_HIDDEN);
+      lv_obj_add_flag(ss_top_station_label, LV_OBJ_FLAG_HIDDEN);
+      lv_obj_add_flag(ss_top_table, LV_OBJ_FLAG_HIDDEN);
+
+      lv_label_set_text(ss_top_label, get_time_string().c_str());
+      lv_label_set_recolor(ss_top_label, false);
+    } else {
+      lv_obj_add_flag(ss_top_label, LV_OBJ_FLAG_HIDDEN);
+      lv_obj_add_flag(ss_top_station_label, LV_OBJ_FLAG_HIDDEN);
+      lv_obj_remove_flag(ss_top_table, LV_OBJ_FLAG_HIDDEN);
+
+      build_screensaver_device_list(ss_top_table);
+    }
+  }
+
+  // --- Update Bottom Block ---
+  if (!tap_at_top) {
+    lv_obj_remove_flag(ss_bottom_label, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_remove_flag(ss_bottom_station_label, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(ss_bottom_table, LV_OBJ_FLAG_HIDDEN);
+
+    lv_label_set_text(ss_bottom_label, tap_text.c_str());
+    lv_label_set_recolor(ss_bottom_label, true);
+    lv_label_set_text(ss_bottom_station_label, global_station_name.c_str());
+  } else {
+    if (show_time) {
+      lv_obj_remove_flag(ss_bottom_label, LV_OBJ_FLAG_HIDDEN);
+      lv_obj_add_flag(ss_bottom_station_label, LV_OBJ_FLAG_HIDDEN);
+      lv_obj_add_flag(ss_bottom_table, LV_OBJ_FLAG_HIDDEN);
+
+      lv_label_set_text(ss_bottom_label, get_time_string().c_str());
+      lv_label_set_recolor(ss_bottom_label, false);
+    } else {
+      lv_obj_add_flag(ss_bottom_label, LV_OBJ_FLAG_HIDDEN);
+      lv_obj_add_flag(ss_bottom_station_label, LV_OBJ_FLAG_HIDDEN);
+      lv_obj_remove_flag(ss_bottom_table, LV_OBJ_FLAG_HIDDEN);
+
+      build_screensaver_device_list(ss_bottom_table);
+    }
+  }
+
+  // --- Update Center Block ---
+  if (total_center_items == 0) {
+    lv_obj_remove_flag(ss_center_label, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(ss_hours_container, LV_OBJ_FLAG_HIDDEN);
+
+    lv_label_set_text(ss_center_title, "Welcome to the Makerspace!");
+    lv_label_set_text(ss_center_label, "");
+  } else if (center_idx < num_announcements) {
+    // Show Announcement
+    lv_obj_remove_flag(ss_center_label, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(ss_hours_container, LV_OBJ_FLAG_HIDDEN);
+
+    String clean_desc = strip_markdown(announcements[center_idx].description);
+    lv_label_set_text(ss_center_title, announcements[center_idx].title.c_str());
+
+    if (clean_desc.length() > 140) {
+      clean_desc = clean_desc.substring(0, 137) + "...";
+    }
+    String ann_text = clean_desc + "\n\nLearn more at " + global_url;
+
+    lv_label_set_text(ss_center_label, ann_text.c_str());
+  } else if (center_idx == num_announcements) {
+    // Show Hours Screen 1: Full Week Table View
+    lv_obj_add_flag(ss_center_label, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_remove_flag(ss_hours_container, LV_OBJ_FLAG_HIDDEN);
+
+    lv_label_set_text(ss_center_title, "Makerspace Hours");
+
+    struct tm timeinfo;
+    int current_wday = -1;
+    if (getLocalTime(&timeinfo)) {
+      current_wday = timeinfo.tm_wday;
+    }
+
+    const char *day_names[] = { "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday" };
+
+    for (int i = 0; i < 7; i++) {
+      String day_str = day_names[i];
+      String time_str = "Unknown";
+
+      if (week_hours[i].active) {
+        if (week_hours[i].closed) {
+          time_str = "Closed";
+        } else {
+          time_str = format_hour(week_hours[i].open) + " - " + format_hour(week_hours[i].close);
+        }
+      }
+
+      lv_label_set_text(ss_hours_day_labels[i], day_str.c_str());
+      lv_label_set_text(ss_hours_time_labels[i], time_str.c_str());
+
+      // Recolor current day row
+      if (i == current_wday) {
+        lv_obj_set_style_text_color(ss_hours_day_labels[i], lv_color_hex(0x00FF00), LV_PART_MAIN);
+        lv_obj_set_style_text_color(ss_hours_time_labels[i], lv_color_hex(0x00FF00), LV_PART_MAIN);
+      } else {
+        lv_obj_set_style_text_color(ss_hours_day_labels[i], lv_color_hex(0xFFFFFF), LV_PART_MAIN);
+        lv_obj_set_style_text_color(ss_hours_time_labels[i], lv_color_hex(0xFFFFFF), LV_PART_MAIN);
+      }
+    }
+  } else {
+    // Show Hours Screen 2: Today's Summary
+    lv_obj_remove_flag(ss_center_label, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(ss_hours_container, LV_OBJ_FLAG_HIDDEN);
+
+    struct tm timeinfo;
+    int current_wday = -1;
+    if (getLocalTime(&timeinfo)) {
+      current_wday = timeinfo.tm_wday;
+    }
+
+    lv_label_set_text(ss_center_title, "Today's Hours");
+    String summary = "";
+
+    if (current_wday != -1 && week_hours[current_wday].active) {
+      if (week_hours[current_wday].closed) {
+        summary = "The makerspace is closed today.\n\nSee more hours at " + global_url;
+      } else {
+        summary = "The makerspace is open today until " + format_hour(week_hours[current_wday].close) + ".\n\nSee more hours at " + global_url;
+      }
+    } else {
+      summary = "Today's hours are currently unavailable.\n\nSee more hours at " + global_url;
+    }
+
+    lv_label_set_text(ss_center_label, summary.c_str());
+  }
+}
+
+void screensaver_burnin_cb(lv_timer_t *timer) {
+  if (current_mode != MODE_SCREENSAVER) return;
+
+  ss_cycle++;
+  update_screensaver_content();
+
+  static int shift_step = 0;
+  shift_step = (shift_step + 1) % 4;
+  int x_off = (shift_step == 1) ? 6 : (shift_step == 3) ? -6
+                                                        : 0;
+  int y_off = (shift_step == 2) ? 6 : (shift_step == 0) ? -6
+                                                        : 0;
+  lv_obj_align(ss_content_container, LV_ALIGN_CENTER, x_off, y_off);
+}
+
 void format_time_left(int seconds, char *buffer) {
   if (seconds <= 0) {
     sprintf(buffer, "");
@@ -579,42 +987,6 @@ void update_acs_display(int num_channels, String states[], int time_left[], int 
   }
 }
 
-// Timer for updating clock UI independently of JSON messages
-void update_clock_cb(lv_timer_t *timer) {
-  if (current_mode != MODE_SCREENSAVER) return;
-  time_t now;
-  time(&now);
-  struct tm *timeinfo = localtime(&now);
-
-  // Don't update if time is uninitialized
-  if (timeinfo->tm_year < 100) return;
-
-  char time_buf[16];
-  char date_buf[32];
-  strftime(time_buf, sizeof(time_buf), "%I:%M %p", timeinfo);
-  strftime(date_buf, sizeof(date_buf), "%A, %b %d", timeinfo);
-
-  if (time_buf[0] == '0') {
-    memmove(time_buf, time_buf + 1, strlen(time_buf));
-  }
-
-  lv_label_set_text(ss_time_label, time_buf);
-  lv_label_set_text(ss_date_label, date_buf);
-}
-
-void screensaver_burnin_cb(lv_timer_t *timer) {
-  if (current_mode != MODE_SCREENSAVER) return;
-
-  static int shift_step = 0;
-  shift_step = (shift_step + 1) % 4;
-
-  int x_off = (shift_step == 1) ? 8 : (shift_step == 3) ? -8
-                                                        : 0;
-  int y_off = (shift_step == 2) ? 8 : (shift_step == 0) ? -8
-                                                        : 0;
-
-  lv_obj_align(ss_content_container, LV_ALIGN_CENTER, x_off, y_off);
-}
 
 uint32_t calculate_crc32(const String &data) {
   uint32_t crc = 0xFFFFFFFF;
@@ -629,39 +1001,23 @@ uint32_t calculate_crc32(const String &data) {
 }
 
 void process_incoming_json(String jsonString) {
-  DynamicJsonDocument doc(4096);
+  DynamicJsonDocument doc(8192);
   DeserializationError error = deserializeJson(doc, jsonString);
   if (error) return;
 
-  // --- 0. Validate CRC ---
-  if (doc.containsKey("crc")) {
-    uint32_t expected_crc = doc["crc"].as<uint32_t>();
-
-    String str_to_check = jsonString;
-    int crc_start = str_to_check.indexOf("\"crc\"");
-    if (crc_start != -1) {
-      int colon_idx = str_to_check.indexOf(':', crc_start);
-      if (colon_idx != -1) {
-        int val_start = colon_idx + 1;
-        while (val_start < str_to_check.length() && isspace(str_to_check[val_start])) val_start++;
-
-        int val_end = val_start;
-        while (val_end < str_to_check.length() && (isdigit(str_to_check[val_end]) || str_to_check[val_end] == '-')) val_end++;
-
-        // Replace the exact number string with '0'
-        str_to_check = str_to_check.substring(0, val_start) + "0" + str_to_check.substring(val_end);
-      }
-    }
-
-    if (calculate_crc32(str_to_check) != expected_crc) {
-      Serial.println("CRC mismatch. Ignoring payload.");
-      return;
-    }
-  }
-
-  // --- 1. Update Global Configs & System Time ---
+  // --- 1. Update Globals & Time ---
   if (doc.containsKey("url")) {
     global_url = doc["url"].as<String>();
+  }
+
+  if (doc.containsKey("deviceName")) {
+    global_device_name = doc["deviceName"].as<String>();
+    lv_label_set_text(info_device_name_label, ("ACS Device Name: " + global_device_name).c_str());
+  }
+
+  if (doc.containsKey("stationName")) {
+    global_station_name = doc["stationName"].as<String>();
+    lv_label_set_text(info_station_name_label, ("Station Name: " + global_station_name).c_str());
   }
 
   if (doc.containsKey("time")) {
@@ -673,6 +1029,34 @@ void process_incoming_json(String jsonString) {
     tv.tv_sec = raw_time;
     tv.tv_usec = 0;
     settimeofday(&tv, NULL);
+  }
+
+  if (doc.containsKey("announcements")) {
+    JsonArray ann_array = doc["announcements"].as<JsonArray>();
+    num_announcements = 0;
+    for (JsonObject ann : ann_array) {
+      if (num_announcements >= MAX_ANNOUNCEMENTS) break;
+      announcements[num_announcements].title = ann["title"].as<String>();
+      announcements[num_announcements].description = ann["description"].as<String>();
+      num_announcements++;
+    }
+  }
+
+  // --- Grab Hours Information ---
+  if (doc.containsKey("hours")) {
+    JsonArray hrs_array = doc["hours"].as<JsonArray>();
+    has_hours = false;
+    for (JsonObject h_obj : hrs_array) {
+      String day_str = h_obj["day"].as<String>();
+      int wday = get_weekday(day_str);
+      if (wday >= 0 && wday <= 6) {
+        week_hours[wday].active = true;
+        week_hours[wday].open = h_obj["open"].as<String>();
+        week_hours[wday].close = h_obj["close"].as<String>();
+        week_hours[wday].closed = h_obj["closed"].as<bool>();
+        has_hours = true;
+      }
+    }
   }
 
   // --- 2. Check for Global Fault State ---
@@ -698,36 +1082,18 @@ void process_incoming_json(String jsonString) {
   if (doc.containsKey("coreOta") || doc.containsKey("ota")) {
     set_display_mode(MODE_OTA);
     int progress = doc.containsKey("coreOta") ? doc["coreOta"].as<int>() : doc["ota"].as<int>();
-
     lv_bar_set_value(ota_bar, progress, LV_ANIM_ON);
     lv_label_set_text_fmt(ota_label, "%d%%", progress);
     return;
   }
 
-  // --- 4. Handle Info Mode (Button Press) ---
+  // --- 4. Handle Info Mode ---
   static unsigned long button_release_time = 0;
   bool button_pressed = doc.containsKey("button") ? doc["button"].as<bool>() : false;
 
   if (button_pressed) {
     button_release_time = millis();
     set_display_mode(MODE_INFO);
-
-    String acs_name = doc.containsKey("deviceName") ? doc["deviceName"].as<String>() : "Unknown";
-    lv_label_set_text_fmt(info_device_name_label, "Reader: %s", acs_name.c_str());
-
-    for (int i = 0; i < MAX_CHANNELS; i++) {
-      if (i < num_channels) {
-        lv_obj_remove_flag(info_device_labels[i], LV_OBJ_FLAG_HIDDEN);
-        String dev_name = doc["deviceNames"][i].as<String>();
-        long hobbs = doc.containsKey("hobbsSeconds") ? doc["hobbsSeconds"][i].as<long>() : 0;
-        char hobbs_str[32];
-        format_hobbs_time(hobbs, hobbs_str);
-
-        lv_label_set_text_fmt(info_device_labels[i], "%s\nRun time: %s", dev_name.c_str(), hobbs_str);
-      } else {
-        lv_obj_add_flag(info_device_labels[i], LV_OBJ_FLAG_HIDDEN);
-      }
-    }
     return;
   } else if (current_mode == MODE_INFO) {
     if (millis() - button_release_time < 5000) {
@@ -745,28 +1111,40 @@ void process_incoming_json(String jsonString) {
     }
   }
 
-  // --- 6. Equipment List Consolidation for Screensaver ---
-  String equip_list_str = "";
-  int available_count = 0;
-
+  // --- 6. Equipment & Hobbs Information Parsing ---
+  ss_device_count = 0;
   for (int i = 0; i < num_channels; i++) {
     String state = (doc.containsKey("state") && doc["state"][i].is<String>()) ? doc["state"][i].as<String>() : "";
-    if (state == "LOCKED_OUT") continue;
 
     if (doc.containsKey("deviceNames") && doc["deviceNames"][i].is<String>()) {
-      if (available_count > 0) equip_list_str += "\n";
-      equip_list_str += "• " + doc["deviceNames"][i].as<String>();
-      available_count++;
+      String dName = doc["deviceNames"][i].as<String>();
+
+      // Save info for Screensaver Equipment Table
+      ss_devices[ss_device_count].name = dName;
+      ss_devices[ss_device_count].state = state;
+
+      if (state == "LOCKED_OUT") {
+        ss_devices[ss_device_count].color = "FF0000";
+      } else if (state == "IDLE") {
+        ss_devices[ss_device_count].color = "FFFF00";
+      } else {
+        ss_devices[ss_device_count].color = "00FF00";
+      }
+      ss_device_count++;
+
+      // Update Info Screen Device + Hobbs Seconds Labels
+      long hSecs = doc.containsKey("hobbsSeconds") ? doc["hobbsSeconds"][i].as<long>() : 0;
+      char hBuf[32];
+      format_hobbs_time(hSecs, hBuf);
+
+      String infoStr = dName + "  -  " + String(hBuf);
+      lv_label_set_text(info_device_labels[i], infoStr.c_str());
+    } else {
+      lv_label_set_text(info_device_labels[i], "");
     }
   }
 
-  if (available_count > 0) {
-    lv_label_set_text(ss_equip_label, equip_list_str.c_str());
-  } else {
-    lv_label_set_text(ss_equip_label, "No equipment available");
-  }
-
-  // --- 7. Determine Screen Mode ---
+  // --- 7. Determine Screen Mode & Trigger Updates ---
   bool is_denied = doc["denied"].as<bool>();
   bool all_idle_or_locked = true;
 
@@ -784,11 +1162,13 @@ void process_incoming_json(String jsonString) {
 
   if (all_idle_or_locked) {
     set_display_mode(MODE_SCREENSAVER);
+    if (current_mode == MODE_SCREENSAVER) {
+      update_screensaver_content();
+    }
   } else {
     set_display_mode(MODE_MAIN);
   }
 
-  // Process channel cards for background/main mode
   String states[MAX_CHANNELS];
   int time_left[MAX_CHANNELS];
   int durations[MAX_CHANNELS];
@@ -800,7 +1180,6 @@ void process_incoming_json(String jsonString) {
     time_left[i] = doc["currentAuthExpires"][i].as<long>() / 1000;
     durations[i] = doc["durations"][i].as<long>() / 1000;
     devices[i] = doc["deviceNames"][i].as<String>();
-
     String reason = doc["deniedReason"][i].as<String>();
 
     if (is_denied && states[i] == "IDLE") {
@@ -836,10 +1215,7 @@ void setup() {
 
   build_ui();
 
-  // Pixel-jitter timer for screen burn-in protection
-  lv_timer_create(screensaver_burnin_cb, 60000, NULL);
-  // Refresh RTC clock UI every 1 second
-  lv_timer_create(update_clock_cb, 1000, NULL);
+  lv_timer_create(screensaver_burnin_cb, 30000, NULL);
 }
 
 int brace_count = 0;
