@@ -4,6 +4,7 @@
 #include <Arduino_GFX_Library.h>
 #include <ArduinoJson.h>
 #include <time.h>
+#include <sys/time.h>
 
 // ==========================================
 // 0. STRUCTS & PROTOTYPES
@@ -20,7 +21,8 @@ enum DisplayMode { MODE_STARTUP,
                    MODE_MAIN,
                    MODE_OTA,
                    MODE_INFO,
-                   MODE_SCREENSAVER };
+                   MODE_SCREENSAVER,
+                   MODE_FAULT };
 
 long get_sort_score(const GroupedCard &g);
 void set_display_mode(DisplayMode mode);
@@ -91,18 +93,19 @@ lv_obj_t *ota_screen;
 lv_obj_t *ota_bar;
 lv_obj_t *ota_label;
 
-// Info Screen Globals
 lv_obj_t *info_screen;
 lv_obj_t *info_device_name_label;
 lv_obj_t *info_device_labels[MAX_CHANNELS];
 
-// Clock Screensaver Globals
 lv_obj_t *screensaver_screen;
 lv_obj_t *ss_content_container;
 lv_obj_t *ss_cta_label;
 lv_obj_t *ss_time_label;
 lv_obj_t *ss_date_label;
 lv_obj_t *ss_equip_label;
+
+lv_obj_t *fault_screen;
+lv_obj_t *fault_label;
 
 DisplayMode current_mode = MODE_STARTUP;
 String global_url = "make.rit.edu";
@@ -115,12 +118,14 @@ void set_display_mode(DisplayMode mode) {
   lv_obj_add_flag(ota_screen, LV_OBJ_FLAG_HIDDEN);
   lv_obj_add_flag(info_screen, LV_OBJ_FLAG_HIDDEN);
   lv_obj_add_flag(screensaver_screen, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_add_flag(fault_screen, LV_OBJ_FLAG_HIDDEN);
 
   if (mode == MODE_STARTUP) lv_obj_remove_flag(startup_screen, LV_OBJ_FLAG_HIDDEN);
   else if (mode == MODE_MAIN) lv_obj_remove_flag(card_container, LV_OBJ_FLAG_HIDDEN);
   else if (mode == MODE_OTA) lv_obj_remove_flag(ota_screen, LV_OBJ_FLAG_HIDDEN);
   else if (mode == MODE_INFO) lv_obj_remove_flag(info_screen, LV_OBJ_FLAG_HIDDEN);
   else if (mode == MODE_SCREENSAVER) lv_obj_remove_flag(screensaver_screen, LV_OBJ_FLAG_HIDDEN);
+  else if (mode == MODE_FAULT) lv_obj_remove_flag(fault_screen, LV_OBJ_FLAG_HIDDEN);
 
   current_mode = mode;
 }
@@ -184,7 +189,6 @@ void build_ui() {
     lv_obj_set_style_text_align(channel_time_labels[i], LV_TEXT_ALIGN_RIGHT, LV_PART_MAIN);
     lv_obj_set_width(channel_time_labels[i], LV_PCT(30));
 
-    // Sub-label for refresh instructions right above the progress bar
     channel_hint_labels[i] = lv_label_create(channel_cards[i]);
     lv_label_set_text(channel_hint_labels[i], "Tap ID to refresh");
     lv_obj_set_style_text_font(channel_hint_labels[i], &lv_font_montserrat_16, LV_PART_MAIN);
@@ -192,11 +196,9 @@ void build_ui() {
     lv_obj_set_style_text_align(channel_hint_labels[i], LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
     lv_obj_add_flag(channel_hint_labels[i], LV_OBJ_FLAG_HIDDEN);
 
-    // --- PROGRESS BAR WITH ENHANCED CONTRAST & SHADOW ---
     channel_bars[i] = lv_bar_create(channel_cards[i]);
     lv_obj_set_size(channel_bars[i], LV_PCT(100), 14);
 
-    // Track (MAIN) styling: dark recessed background, visible border outline, drop shadow
     lv_obj_set_style_bg_color(channel_bars[i], lv_color_hex(0x101010), LV_PART_MAIN);
     lv_obj_set_style_bg_opa(channel_bars[i], LV_OPA_COVER, LV_PART_MAIN);
     lv_obj_set_style_radius(channel_bars[i], 6, LV_PART_MAIN);
@@ -210,7 +212,6 @@ void build_ui() {
     lv_obj_set_style_shadow_opa(channel_bars[i], LV_OPA_60, LV_PART_MAIN);
     lv_obj_set_style_shadow_offset_y(channel_bars[i], 2, LV_PART_MAIN);
 
-    // Active Fill (INDICATOR) styling
     lv_obj_set_style_radius(channel_bars[i], 6, LV_PART_INDICATOR);
 
     lv_bar_set_range(channel_bars[i], 0, 100);
@@ -318,7 +319,6 @@ void build_ui() {
   lv_obj_remove_flag(screensaver_screen, LV_OBJ_FLAG_SCROLLABLE);
   lv_obj_add_flag(screensaver_screen, LV_OBJ_FLAG_HIDDEN);
 
-  // Shiftable container inside screensaver to prevent pixel burn-in over long idle
   ss_content_container = lv_obj_create(screensaver_screen);
   lv_obj_set_size(ss_content_container, 460, 460);
   lv_obj_center(ss_content_container);
@@ -329,14 +329,12 @@ void build_ui() {
   lv_obj_set_flex_flow(ss_content_container, LV_FLEX_FLOW_COLUMN);
   lv_obj_set_flex_align(ss_content_container, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
 
-  // 5a. Call to Action Header
   ss_cta_label = lv_label_create(ss_content_container);
   lv_label_set_text(ss_cta_label, "Tap ID at top to activate");
   lv_obj_set_style_text_font(ss_cta_label, &lv_font_montserrat_24, LV_PART_MAIN);
   lv_obj_set_style_text_color(ss_cta_label, lv_color_hex(0x00FF00), LV_PART_MAIN);
   lv_obj_set_style_text_align(ss_cta_label, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
 
-  // 5b. Clock Box (Time + Date)
   lv_obj_t *clock_box = lv_obj_create(ss_content_container);
   lv_obj_set_width(clock_box, LV_PCT(100));
   lv_obj_set_height(clock_box, LV_SIZE_CONTENT);
@@ -357,7 +355,6 @@ void build_ui() {
   lv_obj_set_style_text_color(ss_date_label, lv_color_hex(0x888888), LV_PART_MAIN);
   lv_obj_set_style_pad_top(ss_date_label, 5, LV_PART_MAIN);
 
-  // 5c. Equipment Card Section
   lv_obj_t *equip_card = lv_obj_create(ss_content_container);
   lv_obj_set_width(equip_card, LV_PCT(100));
   lv_obj_set_height(equip_card, LV_SIZE_CONTENT);
@@ -381,6 +378,29 @@ void build_ui() {
   lv_obj_set_style_text_color(ss_equip_label, lv_color_hex(0xFFFFFF), LV_PART_MAIN);
   lv_label_set_long_mode(ss_equip_label, LV_LABEL_LONG_WRAP);
   lv_obj_set_width(ss_equip_label, LV_PCT(100));
+
+  // --- 6. FAULT OVERLAY ---
+  fault_screen = lv_obj_create(main_screen);
+  lv_obj_set_size(fault_screen, 480, 480);
+  lv_obj_center(fault_screen);
+  lv_obj_set_style_bg_color(fault_screen, lv_color_hex(0xCC0000), LV_PART_MAIN);
+  lv_obj_set_style_border_width(fault_screen, 0, LV_PART_MAIN);
+  lv_obj_add_flag(fault_screen, LV_OBJ_FLAG_HIDDEN);
+
+  lv_obj_t *fault_title = lv_label_create(fault_screen);
+  lv_label_set_text(fault_title, "FAULT!");
+  lv_obj_set_style_text_font(fault_title, &lv_font_montserrat_32, LV_PART_MAIN);
+  lv_obj_set_style_text_color(fault_title, lv_color_hex(0xFFFFFF), LV_PART_MAIN);
+  lv_obj_align(fault_title, LV_ALIGN_TOP_MID, 0, 100);
+
+  fault_label = lv_label_create(fault_screen);
+  lv_label_set_text(fault_label, "Unknown error");
+  lv_obj_set_style_text_font(fault_label, &lv_font_montserrat_24, LV_PART_MAIN);
+  lv_obj_set_style_text_color(fault_label, lv_color_hex(0xFFFFFF), LV_PART_MAIN);
+  lv_label_set_long_mode(fault_label, LV_LABEL_LONG_WRAP);
+  lv_obj_set_width(fault_label, LV_PCT(90));
+  lv_obj_set_style_text_align(fault_label, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
+  lv_obj_align(fault_label, LV_ALIGN_CENTER, 0, 0);
 }
 
 // ==========================================
@@ -469,7 +489,7 @@ void update_acs_display(int num_channels, String states[], int time_left[], int 
     if (i < num_groups) {
       lv_obj_remove_flag(channel_cards[i], LV_OBJ_FLAG_HIDDEN);
       lv_label_set_text(channel_device_labels[i], groups[i].device_name.c_str());
-      lv_obj_add_flag(channel_hint_labels[i], LV_OBJ_FLAG_HIDDEN);  // Hidden by default
+      lv_obj_add_flag(channel_hint_labels[i], LV_OBJ_FLAG_HIDDEN);
 
       uint32_t text_color;
       uint32_t bg_color;
@@ -493,17 +513,16 @@ void update_acs_display(int num_channels, String states[], int time_left[], int 
         lv_obj_set_style_text_align(channel_state_labels[i], LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
 
       } else if (groups[i].state == "UNLOCKED" || groups[i].state == "ACTIVE" || groups[i].state == "ON") {
-        // Warning threshold: time left is 10% or less of total duration
         bool is_expiring_soon = (groups[i].duration > 0) && (groups[i].time_left > 0) && (groups[i].time_left * 10 <= groups[i].duration);
 
         if (is_expiring_soon) {
-          text_color = 0xFFA500;  // Orange warning color
-          bg_color = 0x33271A;    // Dark orange tint
+          text_color = 0xFFA500;
+          bg_color = 0x33271A;
           lv_label_set_text(channel_state_labels[i], "EXPIRING SOON");
           lv_obj_remove_flag(channel_hint_labels[i], LV_OBJ_FLAG_HIDDEN);
         } else {
-          text_color = 0x00FF00;  // Normal active green
-          bg_color = 0x1A331A;    // Dark green tint
+          text_color = 0x00FF00;
+          bg_color = 0x1A331A;
           lv_label_set_text(channel_state_labels[i], groups[i].state.c_str());
         }
 
@@ -560,14 +579,35 @@ void update_acs_display(int num_channels, String states[], int time_left[], int 
   }
 }
 
-// Pixel-jitter timer callback to prevent screen burn-in on idle clock
+// Timer for updating clock UI independently of JSON messages
+void update_clock_cb(lv_timer_t *timer) {
+  if (current_mode != MODE_SCREENSAVER) return;
+  time_t now;
+  time(&now);
+  struct tm *timeinfo = localtime(&now);
+
+  // Don't update if time is uninitialized
+  if (timeinfo->tm_year < 100) return;
+
+  char time_buf[16];
+  char date_buf[32];
+  strftime(time_buf, sizeof(time_buf), "%I:%M %p", timeinfo);
+  strftime(date_buf, sizeof(date_buf), "%A, %b %d", timeinfo);
+
+  if (time_buf[0] == '0') {
+    memmove(time_buf, time_buf + 1, strlen(time_buf));
+  }
+
+  lv_label_set_text(ss_time_label, time_buf);
+  lv_label_set_text(ss_date_label, date_buf);
+}
+
 void screensaver_burnin_cb(lv_timer_t *timer) {
   if (current_mode != MODE_SCREENSAVER) return;
 
   static int shift_step = 0;
   shift_step = (shift_step + 1) % 4;
 
-  // Subtle 8px offset shifts
   int x_off = (shift_step == 1) ? 8 : (shift_step == 3) ? -8
                                                         : 0;
   int y_off = (shift_step == 2) ? 8 : (shift_step == 0) ? -8
@@ -576,40 +616,82 @@ void screensaver_burnin_cb(lv_timer_t *timer) {
   lv_obj_align(ss_content_container, LV_ALIGN_CENTER, x_off, y_off);
 }
 
+uint32_t calculate_crc32(const String &data) {
+  uint32_t crc = 0xFFFFFFFF;
+  for (size_t i = 0; i < data.length(); i++) {
+    crc ^= data[i];
+    for (int j = 0; j < 8; j++) {
+      if (crc & 1) crc = (crc >> 1) ^ 0xEDB88320;
+      else crc >>= 1;
+    }
+  }
+  return ~crc;
+}
+
 void process_incoming_json(String jsonString) {
   DynamicJsonDocument doc(4096);
   DeserializationError error = deserializeJson(doc, jsonString);
   if (error) return;
 
-  // --- 1. Update Global Configs & Time ---
+  // --- 0. Validate CRC ---
+  if (doc.containsKey("crc")) {
+    uint32_t expected_crc = doc["crc"].as<uint32_t>();
+
+    String str_to_check = jsonString;
+    int crc_start = str_to_check.indexOf("\"crc\"");
+    if (crc_start != -1) {
+      int colon_idx = str_to_check.indexOf(':', crc_start);
+      if (colon_idx != -1) {
+        int val_start = colon_idx + 1;
+        while (val_start < str_to_check.length() && isspace(str_to_check[val_start])) val_start++;
+
+        int val_end = val_start;
+        while (val_end < str_to_check.length() && (isdigit(str_to_check[val_end]) || str_to_check[val_end] == '-')) val_end++;
+
+        // Replace the exact number string with '0'
+        str_to_check = str_to_check.substring(0, val_start) + "0" + str_to_check.substring(val_end);
+      }
+    }
+
+    if (calculate_crc32(str_to_check) != expected_crc) {
+      Serial.println("CRC mismatch. Ignoring payload.");
+      return;
+    }
+  }
+
+  // --- 1. Update Global Configs & System Time ---
   if (doc.containsKey("url")) {
     global_url = doc["url"].as<String>();
   }
 
-  // --- 2. Update Screensaver Clock & Date from Epoch ---
   if (doc.containsKey("time")) {
     time_t raw_time = doc["time"].as<time_t>();
-
-    // Handle millisecond vs second timestamps
     if (raw_time > 1000000000000L) {
       raw_time /= 1000;
     }
+    struct timeval tv;
+    tv.tv_sec = raw_time;
+    tv.tv_usec = 0;
+    settimeofday(&tv, NULL);
+  }
 
-    struct tm *timeinfo = localtime(&raw_time);
+  // --- 2. Check for Global Fault State ---
+  int num_channels = doc.containsKey("channels") ? doc["channels"].as<int>() : 0;
+  if (num_channels <= 0 || num_channels > MAX_CHANNELS) num_channels = MAX_CHANNELS;
 
-    char time_buf[16];
-    char date_buf[32];
-
-    strftime(time_buf, sizeof(time_buf), "%I:%M %p", timeinfo);   // e.g., "02:45 PM"
-    strftime(date_buf, sizeof(date_buf), "%A, %b %d", timeinfo);  // e.g., "Saturday, Aug 01"
-
-    // Clean leading zero from hour if present (e.g. "02:45 PM" -> "2:45 PM")
-    if (time_buf[0] == '0') {
-      memmove(time_buf, time_buf + 1, strlen(time_buf));
+  bool system_fault = false;
+  for (int i = 0; i < num_channels; i++) {
+    if (doc["state"][i].as<String>() == "FAULT") {
+      system_fault = true;
+      break;
     }
+  }
 
-    lv_label_set_text(ss_time_label, time_buf);
-    lv_label_set_text(ss_date_label, date_buf);
+  if (system_fault) {
+    set_display_mode(MODE_FAULT);
+    String fmsg = doc.containsKey("faultMessage") ? doc["faultMessage"].as<String>() : "System Fault Detected";
+    lv_label_set_text(fault_label, fmsg.c_str());
+    return;
   }
 
   // --- 3. Handle OTA Mode ---
@@ -633,9 +715,6 @@ void process_incoming_json(String jsonString) {
     String acs_name = doc.containsKey("deviceName") ? doc["deviceName"].as<String>() : "Unknown";
     lv_label_set_text_fmt(info_device_name_label, "Reader: %s", acs_name.c_str());
 
-    int num_channels = doc["channels"].as<int>();
-    if (num_channels <= 0 || num_channels > MAX_CHANNELS) num_channels = MAX_CHANNELS;
-
     for (int i = 0; i < MAX_CHANNELS; i++) {
       if (i < num_channels) {
         lv_obj_remove_flag(info_device_labels[i], LV_OBJ_FLAG_HIDDEN);
@@ -644,7 +723,6 @@ void process_incoming_json(String jsonString) {
         char hobbs_str[32];
         format_hobbs_time(hobbs, hobbs_str);
 
-        // Formats as equipment name with run time on a new line underneath
         lv_label_set_text_fmt(info_device_labels[i], "%s\nRun time: %s", dev_name.c_str(), hobbs_str);
       } else {
         lv_obj_add_flag(info_device_labels[i], LV_OBJ_FLAG_HIDDEN);
@@ -668,17 +746,11 @@ void process_incoming_json(String jsonString) {
   }
 
   // --- 6. Equipment List Consolidation for Screensaver ---
-  // (Only includes equipment that is NOT "LOCKED_OUT")
-  int num_channels = doc["channels"].as<int>();
-  if (num_channels <= 0 || num_channels > MAX_CHANNELS) num_channels = MAX_CHANNELS;
-
   String equip_list_str = "";
   int available_count = 0;
 
   for (int i = 0; i < num_channels; i++) {
     String state = (doc.containsKey("state") && doc["state"][i].is<String>()) ? doc["state"][i].as<String>() : "";
-
-    // Skip equipment that is currently locked out
     if (state == "LOCKED_OUT") continue;
 
     if (doc.containsKey("deviceNames") && doc["deviceNames"][i].is<String>()) {
@@ -764,8 +836,10 @@ void setup() {
 
   build_ui();
 
-  // Pixel-jitter timer for screen burn-in protection (triggers every 60 seconds)
+  // Pixel-jitter timer for screen burn-in protection
   lv_timer_create(screensaver_burnin_cb, 60000, NULL);
+  // Refresh RTC clock UI every 1 second
+  lv_timer_create(update_clock_cb, 1000, NULL);
 }
 
 int brace_count = 0;
