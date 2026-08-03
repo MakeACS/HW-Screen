@@ -45,6 +45,7 @@ enum DisplayMode { MODE_STARTUP,
 long get_sort_score(const GroupedCard &g);
 void set_display_mode(DisplayMode mode);
 void update_screensaver_content();
+void update_motd(String msg);
 
 // ==========================================
 // LOCAL LVGL CONFIGURATION
@@ -155,6 +156,10 @@ bool has_hours = false;
 int ss_cycle = 0;
 SSDevice ss_devices[MAX_CHANNELS];
 int ss_device_count = 0;
+
+lv_obj_t *motd_container;
+lv_obj_t *motd_label;
+String current_motd = "";
 
 void set_display_mode(DisplayMode mode) {
   if (current_mode == mode) return;
@@ -537,11 +542,65 @@ void build_ui() {
   lv_obj_set_width(fault_label, LV_PCT(90));
   lv_obj_set_style_text_align(fault_label, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
   lv_obj_align(fault_label, LV_ALIGN_CENTER, 0, 0);
+
+  // --- 7. MOTD OVERLAY ---
+  motd_container = lv_obj_create(main_screen);
+  lv_obj_set_size(motd_container, 480, 40);
+  lv_obj_align(motd_container, LV_ALIGN_BOTTOM_MID, 0, 0);
+  lv_obj_set_style_bg_color(motd_container, lv_color_hex(0x1a1a1a), LV_PART_MAIN);
+  lv_obj_set_style_border_width(motd_container, 0, LV_PART_MAIN);
+  lv_obj_set_style_pad_all(motd_container, 8, LV_PART_MAIN);
+  lv_obj_add_flag(motd_container, LV_OBJ_FLAG_HIDDEN);
+
+  motd_label = lv_label_create(motd_container);
+  lv_obj_set_width(motd_label, LV_PCT(100));
+  lv_obj_set_style_text_font(motd_label, &lv_font_montserrat_24, LV_PART_MAIN);
+  lv_obj_set_style_text_color(motd_label, lv_color_hex(0xFFA500), LV_PART_MAIN);
+
+  // 10000 = 10 seconds to complete one full scroll. Increase this to make it even slower.
+  lv_obj_set_style_anim_time(motd_label, 20000, LV_PART_MAIN);
+
+  lv_label_set_long_mode(motd_label, LV_LABEL_LONG_SCROLL_CIRCULAR);
+  lv_label_set_text(motd_label, "");
 }
 
 // ==========================================
 // 4. DATA PROCESSING & UTILS
 // ==========================================
+
+void update_motd(String msg) {
+  if (msg == current_motd) return;
+  current_motd = msg;
+
+  // Reduce height by 40px to make room for the MOTD ticker at the bottom
+  int new_height = (msg == "") ? 480 : 440;
+
+  // Adjust heights and alignments of all top-level screen containers
+  lv_obj_t *screens[] = { startup_screen, card_container, ota_screen, info_screen, screensaver_screen, fault_screen };
+  for (int i = 0; i < 6; i++) {
+    lv_obj_set_height(screens[i], new_height);
+    if (msg == "") {
+      lv_obj_add_flag(motd_container, LV_OBJ_FLAG_HIDDEN);
+    } else {
+      lv_obj_remove_flag(motd_container, LV_OBJ_FLAG_HIDDEN);
+
+      // Append spaces to create a visual gap between loops
+      String padded_msg = msg + "          ";
+      lv_label_set_text(motd_label, padded_msg.c_str());
+    }
+  }
+
+  // Keep the inner screensaver content box proportionally sized
+  lv_obj_set_height(ss_content_container, new_height - 20);
+
+  if (msg == "") {
+    lv_obj_add_flag(motd_container, LV_OBJ_FLAG_HIDDEN);
+  } else {
+    lv_obj_remove_flag(motd_container, LV_OBJ_FLAG_HIDDEN);
+    lv_label_set_text(motd_label, msg.c_str());
+  }
+}
+
 String strip_markdown(String md) {
   String out = "";
   for (size_t i = 0; i < md.length();) {
@@ -1010,6 +1069,10 @@ void process_incoming_json(String jsonString) {
     global_url = doc["url"].as<String>();
   }
 
+  if (doc.containsKey("motd")) {
+    update_motd(doc["motd"].as<String>());
+  }
+
   if (doc.containsKey("deviceName")) {
     global_device_name = doc["deviceName"].as<String>();
     lv_label_set_text(info_device_name_label, ("ACS Device Name: " + global_device_name).c_str());
@@ -1046,16 +1109,29 @@ void process_incoming_json(String jsonString) {
   if (doc.containsKey("hours")) {
     JsonArray hrs_array = doc["hours"].as<JsonArray>();
     has_hours = false;
+
+    // 1. Get the current local day of the week (0 = Sunday, 6 = Saturday)
+    struct tm timeinfo;
+    int current_wday = 0;  // Fallback to 0 if time isn't synced yet
+    if (getLocalTime(&timeinfo)) {
+      current_wday = timeinfo.tm_wday;
+    }
+
+    // 2. Iterate through the array using the index offset
+    int index = 0;
     for (JsonObject h_obj : hrs_array) {
-      String day_str = h_obj["day"].as<String>();
-      int wday = get_weekday(day_str);
-      if (wday >= 0 && wday <= 6) {
-        week_hours[wday].active = true;
-        week_hours[wday].open = h_obj["open"].as<String>();
-        week_hours[wday].close = h_obj["close"].as<String>();
-        week_hours[wday].closed = h_obj["closed"].as<bool>();
-        has_hours = true;
-      }
+      if (index >= 7) break;  // Safety check to prevent array out-of-bounds
+
+      // Calculate the target day slot: (Today + offset) modulo 7
+      int target_wday = (current_wday + index) % 7;
+
+      week_hours[target_wday].active = true;
+      week_hours[target_wday].open = h_obj["open"].as<String>();
+      week_hours[target_wday].close = h_obj["close"].as<String>();
+      week_hours[target_wday].closed = h_obj["closed"].as<bool>();
+      has_hours = true;
+
+      index++;
     }
   }
 
